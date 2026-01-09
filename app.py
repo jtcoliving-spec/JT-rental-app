@@ -5,96 +5,103 @@ from datetime import datetime
 
 # --- CONFIGURATION ---
 RATE_PER_UNIT = 0.60
-# PASTE YOUR GOOGLE SHEET LINK BELOW
-SHEET_URL = "https://docs.google.com/spreadsheets/d/1UGG66jyHsNoPwAINcdsgg6oXyEq4WslAOnxLmiTJ7Z0/edit?usp=sharing"
+SHEET_URL = "YOUR_GOOGLE_SHEET_URL_HERE" # Ensure this is your link
 
-st.set_page_config(page_title="Room Rental & AC Tracker", layout="wide")
-
-# Establish connection to Google Sheets
+st.set_page_config(page_title="Rental Management Pro", layout="wide")
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# Helper function to read data
+# Helper functions
 def load_data(sheet_name):
     return conn.read(spreadsheet=SHEET_URL, worksheet=sheet_name, ttl=0)
 
-# Helper function to save data
 def save_data(df, sheet_name):
     conn.update(spreadsheet=SHEET_URL, worksheet=sheet_name, data=df)
     st.cache_data.clear()
 
-# --- SIDEBAR NAVIGATION ---
-st.sidebar.title("Management Menu")
-page = st.sidebar.radio("Go to:", ["Tenant Portal", "Owner Admin"])
+# Custom Lists
+UNITS = ["5-7", "12-1", "13-1", "16-7", "19-1", "20-7", "21-8"]
+ROOM_TYPES = ["Master bedroom M", "Living studio L", "Medium room M1", "Medium room M2", "Single room S"]
 
-# --- OWNER ADMIN PAGE ---
-if page == "Owner Admin":
+menu = st.sidebar.radio("Navigation", ["Tenant Login", "Owner Admin"])
+
+# --- OWNER ADMIN (For Registering & Pre-setting AC) ---
+if menu == "Owner Admin":
     st.header("🔑 Owner Management")
-    password = st.text_input("Enter Admin Password", type="password")
-    
-    if password == "admin123":
-        st.subheader("Register a New Tenant")
-        with st.form("registration_form"):
-            t_name = st.text_input("Full Name")
-            t_unit = st.selectbox("Assign Unit", [f"Unit {i}" for i in range(1, 8)])
-            t_room = st.selectbox("Assign Room", [f"Room {i}" for i in range(1, 6)])
-            submit_reg = st.form_submit_button("Add Tenant")
+    if st.text_input("Admin Password", type="password") == "admin123":
+        st.subheader("Register New Tenant")
+        with st.form("reg"):
+            t_name = st.text_input("Tenant Full Name")
+            t_unit = st.selectbox("Unit", UNITS)
+            t_room = st.selectbox("Room Type", ROOM_TYPES)
+            t_pw = st.text_input("Create Tenant Password", type="password")
+            # This is where you pre-set the starting AC reading
+            t_initial_ac = st.number_input("Starting AC Meter Reading", min_value=0.0, step=0.1)
             
-            if submit_reg and t_name:
-                tenants_df = load_data("tenants")
-                new_tenant = pd.DataFrame([{"Name": t_name, "Unit": t_unit, "Room": t_room}])
-                updated_tenants = pd.concat([tenants_df, new_tenant], ignore_index=True)
-                save_data(updated_tenants, "tenants")
-                st.success(f"Registered {t_name} to {t_unit}, {t_room}!")
-
-# --- TENANT PORTAL PAGE ---
-else:
-    st.header("📱 Tenant Payment & AC Portal")
-    tenants_list = load_data("tenants")
-    
-    if tenants_list.empty:
-        st.warning("No tenants registered yet. Owner must register tenants in Admin mode first.")
-    else:
-        # Tenant "Login"
-        selected_user = st.selectbox("Identify Yourself (Select Name)", [""] + tenants_list['Name'].tolist())
-        
-        if selected_user:
-            # Auto-find their Unit and Room
-            user_info = tenants_list[tenants_list['Name'] == selected_user].iloc[0]
-            my_unit, my_room = user_info['Unit'], user_info['Room']
-            
-            st.success(f"Hello {selected_user}! Logging for **{my_unit}, {my_room}**")
-            
-            # Fetch last reading from history
-            history = load_data("records")
-            my_history = history[(history['Unit'] == my_unit) & (history['Room'] == my_room)]
-            last_val = my_history.iloc[-1]['AC_Reading'] if not my_history.empty else 0.0
-            
-            # Billing Section
-            st.info(f"Last month's meter reading: **{last_val}**")
-            current_reading = st.number_input("Enter Current Meter Reading", min_value=float(last_val), step=0.1)
-            
-            units_used = current_reading - last_val
-            ac_charge = units_used * RATE_PER_UNIT
-            rent_fixed = st.number_input("Enter Agreed Monthly Rent (RM)", min_value=0.0)
-            
-            total_payable = rent_fixed + ac_charge
-            st.metric(label="Total to Pay", value=f"RM {total_payable:.2f}", delta=f"AC: RM {ac_charge:.2f}")
-
-            # Submission with Receipt Record
-            if st.button("Confirm & Log Payment"):
-                new_entry = pd.DataFrame([{
-                    "Date": datetime.now().strftime("%Y-%m-%d"),
-                    "Unit": my_unit,
-                    "Room": my_room,
-                    "Tenant": selected_user,
-                    "Prev_Reading": last_val,
-                    "AC_Reading": current_reading,
-                    "Units_Used": units_used,
-                    "AC_Cost": ac_charge,
-                    "Rent_Paid": rent_fixed,
-                    "Total_Paid": total_payable
+            if st.form_submit_button("Register & Save"):
+                # 1. Add to Tenant List
+                t_df = load_data("tenants")
+                new_t = pd.DataFrame([{"Name": t_name, "Unit": t_unit, "Room": t_room, "Password": t_pw}])
+                save_data(pd.concat([t_df, new_t], ignore_index=True), "tenants")
+                
+                # 2. Log Initial Reading into Records so the app has a "Previous" value
+                r_df = load_data("records")
+                init_log = pd.DataFrame([{
+                    "Date": "INITIAL SETUP", "Unit": t_unit, "Room": t_room, "Tenant": t_name,
+                    "Prev_Reading": 0, "AC_Reading": t_initial_ac, "Units_Used": 0, 
+                    "AC_Cost": 0, "Rent_Paid": 0, "Total_Paid": 0
                 }])
-                updated_history = pd.concat([history, new_entry], ignore_index=True)
-                save_data(updated_history, "records")
-                st.balloons()
-                st.success("Your payment and reading have been recorded. Thank you!")
+                save_data(pd.concat([r_df, init_log], ignore_index=True), "records")
+                st.success("Tenant registered and AC starting point set!")
+
+# --- TENANT LOGIN & PORTAL ---
+else:
+    st.header("📱 Tenant Portal")
+    tenant_db = load_data("tenants")
+    
+    # Login Logic
+    name_input = st.selectbox("Select Your Name", [""] + tenant_db['Name'].tolist())
+    pw_input = st.text_input("Enter Your Password", type="password")
+    
+    if name_input and pw_input:
+        user_row = tenant_db[(tenant_db['Name'] == name_input) & (tenant_db['Password'] == str(pw_input))]
+        
+        if not user_row.empty:
+            info = user_row.iloc[0]
+            st.success(f"Logged in: {info['Unit']} - {info['Room']}")
+            
+            # Get Last Reading
+            history = load_data("records")
+            my_hist = history[(history['Unit'] == info['Unit']) & (history['Room'] == info['Room'])]
+            prev = my_hist.iloc[-1]['AC_Reading'] if not my_hist.empty else 0.0
+            
+            st.metric("Previous Meter Reading", f"{prev} units")
+            curr = st.number_input("Enter New AC Meter Reading", min_value=float(prev), step=0.1)
+            
+            used = curr - prev
+            ac_cost = used * RATE_PER_UNIT
+            rent = st.number_input("Monthly Rent (RM)", min_value=0.0)
+            
+            st.subheader(f"Total Amount to Pay: RM {rent + ac_cost:.2f}")
+            
+            # Photo Uploaders
+            img_pay = st.file_uploader("Upload Payment Slip", type=['png', 'jpg', 'jpeg'])
+            img_ac = st.file_uploader("Upload AC Meter Photo", type=['png', 'jpg', 'jpeg'])
+            
+            if st.button("Submit Monthly Record"):
+                if img_pay and img_ac:
+                    # NOTE: Since we are using Google Sheets, we save the status here. 
+                    # Real image hosting requires extra setup, so for now we log that they were uploaded.
+                    new_rec = pd.DataFrame([{
+                        "Date": datetime.now().strftime("%Y-%m-%d"),
+                        "Unit": info['Unit'], "Room": info['Room'], "Tenant": name_input,
+                        "Prev_Reading": prev, "AC_Reading": curr, "Units_Used": used,
+                        "AC_Cost": ac_cost, "Rent_Paid": rent, "Total_Paid": rent + ac_cost,
+                        "Receipt_URL": "Uploaded", "AC_Photo_URL": "Uploaded"
+                    }])
+                    save_data(pd.concat([history, new_rec], ignore_index=True), "records")
+                    st.balloons()
+                    st.success("Submission Successful!")
+                else:
+                    st.error("Please upload both photos before submitting.")
+        else:
+            st.error("Incorrect password.")
